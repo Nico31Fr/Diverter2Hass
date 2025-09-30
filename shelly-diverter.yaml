@@ -1,8 +1,8 @@
 esphome:
   name: shelly-diverter
 
-esp8266:
-  board: esp01_1m
+esp8266:          # device defintion -> https://devices.esphome.io/standards/global
+  board: esp01_1m #   board defintion-> https://devices.esphome.io/devices/Shelly-1 
 
 # Enable logging
 logger:
@@ -49,25 +49,46 @@ uart:
       bytes: 2000
     sequence:
       - lambda: |-
-          UARTDebug::log_string(direction, bytes);
-          std::string str(bytes.begin(), bytes.end());
-          json::parse_json(str.c_str(), [](JsonObject root) -> bool {
-              if (root["real_power_watt"] && root["triac1_diverted_energy_wh"]) {
-                  if((root["real_power_watt"] >= -1000)&&(root["real_power_watt"] <= 10000)){id(vaill1).publish_state(root["real_power_watt"]);}
-                  id(vaill2).publish_state(root["triac1_diverted_energy_wh"]);
-                  return true;
-              }
-              else {
-                return false;
-              }
-          });
+            std::string str(bytes.begin(), bytes.end());
+            ESP_LOGD("uart", "Données reçues: %s", str.c_str());
+
+            // ==== JsonDocument used to ensure flexibility and robustness of json decoding. ======
+            JsonDocument doc;
+            DeserializationError error = deserializeJson(doc, str);
+            if (error) {
+              ESP_LOGD("uart", "Erreur de parsing JSON: %s", error.c_str());
+              return;
+            } else {
+              ESP_LOGD("uart", "json decode done OK");
+            }
+
+            // ==== Extraction of JSON fields =====================================================
+            if (doc.containsKey("average_power_01min_w")) {
+              float f =     doc["average_power_01min_w"];
+              id(                vaill1).publish_state(f);
+            }
+            if (doc.containsKey("triac1_diverted_energy_wh")) {
+              float f =     doc["triac1_diverted_energy_wh"];
+              id(                vaill2).publish_state(f);
+            }
+
+## send recurent message 
+
+# send message to UART at fix recurence
+time:
+  - platform: sntp
+    id: my_time
+
+    on_time:
+      # Every 30sec
+      - seconds: /30
+        then:
+          - uart.write:
+              id: diverterUART
+              data: "DIVERTER_GETJSON\n"
+
 
 switch:
-  - platform: uart
-    name: "diverter_getJSON"
-    data: "DIVERTER_GETJSON\n"
-    send_every: 30s
-    restore_mode: "ALWAYS_ON"
   - platform: uart
     id: diverter_marche_force_on
     internal: true
@@ -94,13 +115,13 @@ switch:
 
 sensor:
   - platform: template
-    id: vaill1
-    name: "In/Out power"
+    id: vaill1                         # "In/Out power" definition with robust data flow, average_power_01min_w. Stable and representative average power.
+    name: "In/Out power"               # average_power_01min_w, Puissance réelle (compteur EDF), valeur moyenne sur la dernière minute
     unit_of_measurement: "W"
 
   - platform: template
     id: vaill2
-    name: "triac1_diverted_energy"
+    name: "triac1_diverted_energy"     # triac1_diverted_energy_wh, cumul de l'energie solaire divertie injectée dans le cumulus depuis la mise à ON, valeur instantanée disponnible au moment de la requête
     device_class: "energy"
     state_class: "total_increasing"
     unit_of_measurement: "Wh"
